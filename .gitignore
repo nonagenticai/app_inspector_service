@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.python-version
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Data (runtime)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+test-results/
+
+# Hot-repo worktree convention (git worktree add .worktrees/<slug>). Never commit a
+# worktree checkout into its own repo — this is how 133 .worktrees/mr-safety files
+# ended up staged in the index.
+.worktrees/

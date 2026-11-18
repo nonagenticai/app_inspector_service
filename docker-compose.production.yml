@@ -1,0 +1,103 @@
+services:
+  # ============================================================================
+  # PostgreSQL Database (Production)
+  # ============================================================================
+  app_inspector_service_postgres:
+    image: postgres:18-alpine
+    container_name: app_inspector_service_postgres_prod
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: app_inspector_service
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5461:5432"
+    volumes:
+      - app_inspector_service_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inspector-network
+    restart: always
+
+  # ============================================================================
+  # Redis Cache (Production)
+  # ============================================================================
+  app-inspector-service-redis:
+    image: redis:7-alpine
+    container_name: app_inspector_service_redis_prod
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6401:6379"
+    volumes:
+      - app_inspector_service_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inspector-network
+    restart: always
+
+  # ============================================================================
+  # App Inspector Service API (Production)
+  # ============================================================================
+  app-inspector-service-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: app_inspector_service_api_prod
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@app_inspector_service_postgres:5432/app_inspector_service
+      REDIS_URL: redis://app-inspector-service-redis:6379/0
+      API_HOST: 0.0.0.0
+      API_PORT: 6311
+      API_DEBUG: "false"
+      AUTH_ENABLED: "true"
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_PATH: /app/data/inspector
+      LOG_LEVEL: WARNING
+      LOG_JSON_LOGS: "true"
+    ports:
+      - "6311:6311"
+    volumes:
+      - app_inspector_service_data:/app/data/inspector
+    depends_on:
+      app_inspector_service_postgres:
+        condition: service_healthy
+      app-inspector-service-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6311/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - inspector-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+networks:
+  inspector-network:
+    driver: bridge
+
+volumes:
+  app_inspector_service_postgres_data:
+    name: app_inspector_service_postgres_data_prod
+  app_inspector_service_redis_data:
+    name: app_inspector_service_redis_data_prod
+  app_inspector_service_data:
+    name: app_inspector_service_data_prod

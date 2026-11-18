@@ -1,0 +1,101 @@
+ARG BASE_REGISTRY=docker.io
+# ============================================================================
+# PRODUCTION MULTI-STAGE DOCKERFILE FOR APP_INSPECTOR_SERVICE
+# ============================================================================
+# Build context must be the w2v root (parent directory) so that
+# the w2v_common path dependency is accessible.
+# Port: 6311
+
+# ============================================================================
+# STAGE 1: DEPENDENCY BUILDER
+# ============================================================================
+FROM ${BASE_REGISTRY}/library/python:3.14-slim AS builder
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_SYSTEM_PYTHON=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+WORKDIR /app
+
+# Copy w2v_common (path dependency) alongside the service
+COPY w2v_common/ /w2v_common/
+
+COPY app_inspector_service/pyproject.toml app_inspector_service/uv.lock* ./
+
+RUN uv sync --frozen --no-dev --no-install-project || uv sync --no-dev --no-install-project
+
+COPY app_inspector_service/src/ ./src/
+
+RUN uv sync --frozen --no-dev || uv sync --no-dev
+
+# ============================================================================
+# STAGE 2: RUNTIME
+# ============================================================================
+FROM ${BASE_REGISTRY}/library/python:3.14-slim
+
+ARG BUILD_DATE="2026-02-22"
+ARG VERSION="0.1.0"
+
+LABEL org.opencontainers.image.title="App Inspector Service"
+LABEL org.opencontainers.image.description="Mobile app inspection microservice with Appium and device farm integration"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    PATH="/app/.venv/bin:${PATH}" \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    ca-certificates \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user
+RUN useradd --create-home -u 1000 --shell /sbin/nologin inspectorservice && \
+    mkdir -p /app /app/logs /app/data && \
+    chown -R inspectorservice:inspectorservice /app
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder --chown=inspectorservice:inspectorservice /app/.venv /app/.venv
+
+# Copy application code
+COPY --chown=inspectorservice:inspectorservice app_inspector_service/src/ ./src/
+
+# Verify core dependencies
+RUN python -c "import fastapi; import sqlalchemy; print('Dependencies OK')"
+
+RUN mkdir -p /app/logs /app/data && \
+    chmod 755 /app/logs /app/data && \
+    chown -R inspectorservice:inspectorservice /app
+
+USER 1000:1000
+
+# ============================================================================
+# PORT: 6311 (App Inspector Service)
+# ============================================================================
+EXPOSE 6311/tcp
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD ["curl", "-f", "http://localhost:6311/health"]
+
+# 2 worker(s)
+CMD ["python", "-m", "uvicorn", "src.asgi:app", \
+     "--host", "0.0.0.0", \
+     "--port", "6311", \
+     "--workers", "2", \
+     "--loop", "uvloop", \
+     "--http", "httptools"]

@@ -1,0 +1,134 @@
+services:
+  # ============================================================================
+  # PostgreSQL Database
+  # ============================================================================
+  app_inspector_service_postgres:
+    image: postgres:18-alpine
+    container_name: app_inspector_service_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: app_inspector_service
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5461:5432"
+    volumes:
+      # postgres:18 keeps its data in a versioned subdir (/var/lib/postgresql/18/docker)
+      # and REFUSES TO START if you mount over the legacy /var/lib/postgresql/data
+      # path — the container restart-loops with the "suggested container
+      # configuration for 18+" notice. The image's own guidance is a single mount
+      # one level up, which is what this is.
+      - app_inspector_service_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inspector-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # Redis Cache
+  # ============================================================================
+  app-inspector-service-redis:
+    image: redis:7-alpine
+    container_name: app_inspector_service_redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6401:6379"
+    volumes:
+      - app_inspector_service_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inspector-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # App Inspector Service API
+  # ============================================================================
+  app-inspector-service-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app_inspector_service_api
+    environment:
+      # Application
+      ENVIRONMENT: production
+      APP_NAME: App Inspector Service
+      APP_VERSION: 0.1.0
+
+      # Database
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-changeme}@app_inspector_service_postgres:5432/app_inspector_service
+      POSTGRES_POOL_MIN_SIZE: 2
+      POSTGRES_POOL_MAX_SIZE: 10
+      DATABASE_POOL_TIMEOUT: 30
+      DATABASE_POOL_RECYCLE: 3600
+      DATABASE_ECHO: "false"
+
+      # Redis
+      REDIS_URL: redis://app-inspector-service-redis:6379/0
+      REDIS_MAX_CONNECTIONS: 10
+
+      # API
+      API_HOST: 0.0.0.0
+      API_PORT: 6311
+      API_DEBUG: "false"
+      API_RELOAD: "false"
+      API_CORS_ORIGINS: "http://localhost:*,http://127.0.0.1:*"
+
+      # Auth
+      AUTH_ENABLED: "false"
+      DEFAULT_TENANT_ID: 0195f48b-d000-7000-8000-000000000001
+
+      # Storage
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_PATH: /app/data/inspector
+
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_JSON_LOGS: "false"
+
+      # Appium
+      APPIUM_SERVER_URL: http://localhost:4723
+    ports:
+      - "6311:6311"
+    volumes:
+      - app_inspector_service_data:/app/data/inspector
+      - ./logs:/app/logs
+    depends_on:
+      app_inspector_service_postgres:
+        condition: service_healthy
+      app-inspector-service-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6311/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - inspector-network
+    restart: unless-stopped
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  inspector-network:
+    driver: bridge
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  app_inspector_service_postgres_data:
+    name: app_inspector_service_postgres_data
+  app_inspector_service_redis_data:
+    name: app_inspector_service_redis_data
+  app_inspector_service_data:
+    name: app_inspector_service_data
